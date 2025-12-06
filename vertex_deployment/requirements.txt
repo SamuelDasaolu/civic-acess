@@ -1,0 +1,17 @@
+
+# Web server and framework
+fastapi
+gunicorn
+uvicorn
+
+# ML and data processing
+transformers==4.40.1 # Pinning version for stability
+torch==2.3.0 # Pinning version for stability
+sentence-transformers
+accelerate
+
+# Required by the N-ATLaS model for its architecture
+timm
+
+# Environment variable management
+python-dotenv
