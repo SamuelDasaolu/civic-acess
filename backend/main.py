@@ -1,106 +1,140 @@
-# 
-# from fastapi import FastAPI, HTTPException
-# from pydantic import BaseModel
-# import os
-# from rag_engine import RAGEngine
-# 
-# # --- NEW: Import transformers for local inference ---
-# from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-# import torch
-# # ----------------------------------------------------
-# 
-# # --- Startup Check for HF_TOKEN ---
-# # Still required by transformers to download gated models.
-# hf_token = os.getenv("HF_TOKEN")
-# if hf_token:
-#     print("--- HF_TOKEN found in environment. ---")
-# else:
-#     print("--- WARNING: HF_TOKEN not found. This may cause issues downloading the model. ---")
-# # ------------------------------------
-# 
-# app = FastAPI()
-# 
-# @app.get("/")
-# async def root():
-#     return {"message": "API is running. Ready to receive requests at /chat."}
-# 
-# # --- RAG Engine Initialization ---
-# try:
-#     print("--- Initializing RAG Engine from main.py ---")
-#     rag_engine = RAGEngine()
-#     rag_engine.load_constitution()
-#     print("--- RAG Engine initialized successfully. ---\n")
-# except Exception as e:
-#     print(f"--- FATAL ERROR: RAG Engine failed to initialize: {e} ---")
-#     raise
-# 
-# # --- NEW: Local Model and Pipeline Initialization ---
-# model_id = "NCAIR1/N-ATLaS"
-# try:
-#     print(f"--- Initializing local transformers pipeline for {model_id} ---")
-#     print("--- NOTE: The first run will download the model, which may take several minutes. ---")
-#     
-#     # Load the tokenizer and model from Hugging Face.
-#     # The token is necessary to access this gated model.
-#     tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token)
-#     model = AutoModelForCausalLM.from_pretrained(
-#         model_id, 
-#         token=hf_token, 
-#         torch_dtype=torch.float16 # Use float16 for memory efficiency
-#     )
-#     
-#     # Create a text-generation pipeline using the loaded model and tokenizer.
-#     llm_pipeline = pipeline(
-#         "text-generation",
-#         model=model,
-#         tokenizer=tokenizer,
-#         torch_dtype=torch.float16,
-#         device_map="auto" # Automatically uses GPU if available, else CPU
-#     )
-#     
-#     print(f"--- Local pipeline for {model_id} initialized successfully. ---\n")
-# 
-# except Exception as e:
-#     print(f"--- FATAL ERROR: Local model pipeline failed to initialize: {e} ---")
-#     print("--- Please ensure you have accepted the model's terms on Hugging Face and have a valid HF_TOKEN in .idx/dev.nix ---")
-#     raise
-# # ----------------------------------------------------
-# 
-# class ChatMessage(BaseModel):
-#     message: str
-# 
-# @app.post("/chat")
-# async def chat(chat_message: ChatMessage):
-#     user_question = chat_message.message
-#     
-#     print("--- Step 1: Querying RAG Engine ---")
-#     legal_context = rag_engine.query_law(user_question)
-#     
-#     # --- Define Prompt for Local Model ---
-#     prompt = f"You are a Nigerian legal assistant. Use the provided legal context to answer the user's question.\n\n[Legal Context]\n{legal_context}\n\n[User Question]\n{user_question}"
-# 
-#     print(f"--- Step 2: Generating text with local LLM ({model_id}) ---")
-#     try:
-#         # --- NEW: Use the local pipeline for inference ---
-#         sequences = llm_pipeline(
-#             prompt,
-#             max_new_tokens=500,
-#             num_return_sequences=1,
-#             eos_token_id=tokenizer.eos_token_id
-#         )
-#         
-#         generated_text = sequences[0]['generated_text']
-#         
-#         print("--- Step 3: Successfully received response from local LLM ---\n")
-#         return {"generated_text": generated_text}
-# 
-#     except Exception as e:
-#         error_detail = {
-#             "message": "Failed to get a successful response from the local transformers pipeline.",
-#             "model_id": model_id,
-#             "error_type": type(e).__name__,
-#             "error_details": str(e)
-#         }
-#         print(f"--- ERROR: {error_detail} ---")
-#         raise HTTPException(status_code=500, detail=error_detail)
-# 
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import requests
+import os
+from dotenv import load_dotenv
+from rag_engine import RAGEngine
+
+load_dotenv()
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Initialize RAG ---
+try:
+    print("--- Initializing RAG Engine ---")
+    rag_engine = RAGEngine()
+    rag_engine.load_constitution()
+    print("--- RAG Engine initialized successfully. ---\n")
+except Exception as e:
+    rag_engine = None
+
+class UserQuery(BaseModel):
+    message: str
+    language: str = "english"
+
+@app.post("/chat")
+async def chat(query: UserQuery):
+    user_text = query.message
+    target_lang = query.language.lower().strip()
+
+    print(f"--- INCOMING: '{user_text}' -> '{target_lang}' ---")
+
+    # 1. RAG Lookup
+    rag_context = "No specific legal section found."
+    if rag_engine:
+        try:
+            context_list = rag_engine.query_law(user_text)
+            if context_list:
+                rag_context = "\n".join(context_list) if isinstance(context_list, list) else str(context_list)
+        except Exception as e:
+            rag_context = f"Error: {str(e)}"
+
+    # 2. PUPPETEER STRATEGY (Refined for Failure Modes)
+    
+    ai_starter = "" 
+
+    if target_lang == "pidgin":
+        # FIX: Removed "Omo" to prevent Yoruba pivot.
+        # Added negative constraint against Yoruba words.
+        system_instruction = """Act like a street guy from Lagos. 
+Translate the [Legal Context] into pure Nigerian Pidgin English.
+Do NOT use Yoruba words (like 'naa', 'ni', 'wipe').
+Use 'na', 'dey', 'we', 'dem'.
+"""
+        ai_starter = "My guy, dis law talk say" # <--- Changed from 'Omo'
+
+    elif target_lang == "yoruba":
+        system_instruction = """Translate the main idea of the [Legal Context] into very simple Yoruba.
+Do not use big legal words."""
+        ai_starter = "Ofin yii sọ ni ṣókí pé"
+
+    elif target_lang == "hausa":
+        system_instruction = """Translate the main idea of the [Legal Context] into very simple Hausa."""
+        ai_starter = "Wannan dokar ta ce"
+
+    elif target_lang == "igbo":
+        # FIX: Injected vocabulary for Constitution.
+        system_instruction = """Translate the main idea of the [Legal Context] into simple Igbo.
+Use 'Usoro Iwu' for Constitution.
+Use 'kachasị elu' for Supreme."""
+        ai_starter = "Usoro Iwu a kwuru na" # <--- Changed starter to use specific term
+
+    else: # English
+        system_instruction = """You are a Nigerian legal assistant. 
+Explain the [Legal Context] simply."""
+        ai_starter = "Basically, the law states that"
+
+    # 3. Construct Prompt
+    full_prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+{system_instruction}
+
+[Legal Context]
+{rag_context}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{user_text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+{ai_starter}"""
+
+    # 4. Call Brain
+    BRAIN_URL = os.getenv("MODEL_API_URL")
+    if not BRAIN_URL:
+        return {"response": "Error: No Brain URL configured."}
+
+    try:
+        # Note: Removed temperature from payload as server might ignore it.
+        # We rely on the prompt's strong guidance.
+        payload = {
+            "prompt": full_prompt,
+            "max_new_tokens": 256
+        }
+        
+        response = requests.post(BRAIN_URL, json=payload, timeout=45)
+        
+        if response.status_code == 200:
+            raw_reply = response.json().get("generated_text", "")
+            
+            # --- CLEANUP LOGIC ---
+            if ai_starter in raw_reply:
+                # Keep the starter + whatever followed
+                clean_reply = raw_reply.split(ai_starter)[-1] 
+                final_answer = ai_starter + clean_reply
+            else:
+                # Fallback if model decided to repeat the prompt weirdly
+                if "assistant<|end_header_id|>" in raw_reply:
+                    clean_reply = raw_reply.split("assistant<|end_header_id|>")[-1].strip()
+                    final_answer = clean_reply
+                else:
+                    final_answer = raw_reply
+
+            return {
+                "response": final_answer,
+                "debug_info": {
+                    "language": target_lang,
+                    "strategy": "Puppeteer V2 (Vocab Injection)",
+                    "starter_used": ai_starter
+                }
+            }
+        else:
+            return {"response": f"Brain Error {response.status_code}: {response.text}"}
+
+    except Exception as e:
+        return {"response": f"Connection Error: {str(e)}"}

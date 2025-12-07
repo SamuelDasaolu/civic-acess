@@ -1,29 +1,20 @@
-# Use the official lightweight Python image.
-# https://hub.docker.com/_/python
-FROM python:3.11-slim
+# Use a lightweight PyTorch image with CUDA support
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
 
-# Allow statements and log messages to be sent straight to the terminal
-# without being first buffered.
-ENV PYTHONUNBUFFERED True
+# Install git (needed for some hugginface operations)
+RUN apt-get update && apt-get install -y git
 
-# Set the working directory in the container.
 WORKDIR /app
 
-# Copy the requirements file into the container at /app
+# Install dependencies
 COPY requirements.txt .
-
-# Install the dependencies.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application's code into the container at /app
-COPY . .
+# Copy server code
+COPY main.py .
 
-# Set the Hugging Face token as a build argument
-ARG HF_TOKEN
-ENV HF_TOKEN=$HF_TOKEN
-
-# Make port 8080 available to the world outside this container
+# Vertex AI requires port 8080
 EXPOSE 8080
 
-# Run the app.
-CMD exec gunicorn --bind :8080 --workers 1 --threads 8 --timeout 0 main:app -k uvicorn.workers.UvicornWorker
+# Start the server
+CMD ["python", "main.py"]
