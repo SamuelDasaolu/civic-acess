@@ -1,1 +1,3 @@
-backend/.env
+.idx/dev.nix
+.env
+backend/__pycache__
