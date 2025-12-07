@@ -189,3 +189,27 @@ def view_logs():
         # This will print the REAL error to your terminal and the browser
         print(f"LOGS ENDPOINT ERROR: {e}")
         return {"error": f"Internal Error: {str(e)}"}
+
+
+@app.post("/test-rag")
+async def test_rag_retrieval(query: UserQuery):
+    """
+    Test endpoint to see exactly what the RAG engine retrieves.
+    Returns the raw text chunks found in the vector database.
+    """
+    if not rag_engine:
+        raise HTTPException(status_code=500, detail="RAG Engine not initialized")
+    
+    try:
+        # Get the raw list of chunks (assuming query_law returns a list of strings)
+        # If your function returns a single string, you might want to modify it 
+        # or just return that string.
+        results = rag_engine.query_law(query.message)
+        
+        return {
+            "query": query.message,
+            "retrieved_chunks": results,
+            "chunk_count": len(results) if isinstance(results, list) else 1
+        }
+    except Exception as e:
+        return {"error": str(e)}

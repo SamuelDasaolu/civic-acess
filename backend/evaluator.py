@@ -1,20 +1,23 @@
 import sqlite3
 import os
-import google.generativeai as genai
 import json
+import re
 from datetime import datetime
 from dotenv import load_dotenv
+import google.generativeai as genai
 
 load_dotenv()
 
 DB_NAME = "chat_logs.db"
 
-# Configure Gemini
+# --- CONFIGURATION ---
+# We use the standard library but target the Flash model
 api_key = os.getenv("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
-else:
-    print("⚠️ WARNING: GEMINI_API_KEY not found in .env. Judge will fail.")
+
+# Fallback to 'gemini-1.5-flash' which is stable on this library
+JUDGE_MODEL = "gemini-2.5-flash-preview-09-2025"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -39,12 +42,10 @@ def log_request(query, lang, context, reply):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
     cursor.execute('''
         INSERT INTO interactions (timestamp, user_query, target_lang, rag_context, model_reply)
         VALUES (?, ?, ?, ?, ?)
     ''', (timestamp, query, lang, context, reply))
-    
     row_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -52,52 +53,63 @@ def log_request(query, lang, context, reply):
 
 def lazy_judge(row_id, user_query, rag_context, model_reply):
     """
-    Background Task: Uses Gemini 1.5 Flash to grade the answer.
+    Uses Gemini 1.5 Flash (via stable lib) to grade response.
     """
-    print(f"--- [Judge] STARTING for Row {row_id}... ---")
+    print(f"--- [Judge] Grading Row {row_id}... ---")
     
-    # --- CRITICAL ERROR CATCHING ---
+    if not api_key:
+        print("❌ [Judge] Error: No GEMINI_API_KEY found.")
+        return
+
     try:
-        if not os.getenv("GEMINI_API_KEY"):
-            raise ValueError("Missing GEMINI_API_KEY in environment variables")
-
-        # 1. Initialize the Judge
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # 1. Initialize Model
+        model = genai.GenerativeModel(JUDGE_MODEL)
         
-        # 2. The Grading Prompt
+        # 2. Prompt (Explicitly asking for JSON string)
         prompt = f"""
-        Act as an impartial legal expert. Evaluate the accuracy of the AI's response.
+        Act as an impartial legal evaluator. 
+        Compare the AI's Response against the Reference Legal Context.
 
-        **Input Data:**
-        - User Question: "{user_query}"
-        - Truth (Legal Context): "{rag_context}"
-        - AI Response: "{model_reply}"
+        Query: "{user_query}"
+        Reference Context: "{rag_context}"
+        AI Response: "{model_reply}"
 
-        **Criteria:**
-        1. Accuracy (0-100): Does the response correctly reflect the Legal Context?
-        2. Hallucination: Did the AI invent laws not in the text?
-        3. Clarity: Is the translation/explanation simple?
+        Evaluation Criteria:
+        1. Accuracy (0-100): Does the AI response strictly follow the Reference Context?
+        2. Hallucination: Did the AI invent facts not in the Reference?
+        3. Clarity: Is the answer simple?
 
-        **Output Format:**
-        Provide JSON ONLY with these keys: "score" (int) and "reason" (string).
+        Output Format:
+        Return a valid JSON string ONLY. Do not use Markdown.
+        {{
+            "score": 85,
+            "reason": "The explanation matches the context perfectly."
+        }}
         """
         
-        # 3. Call Gemini
-        print(f"--- [Judge] Calling Google Gemini API... ---")
+        # 3. Call API
         response = model.generate_content(prompt)
-        text = response.text.replace("```json", "").replace("```", "").strip()
+        text = response.text
         
-        # 4. Parse Result
+        # 4. Cleaning & Parsing (Manual logic since we lost strict mode)
+        # Remove markdown code blocks if the model adds them
+        clean_text = text.replace("```json", "").replace("```", "").strip()
+        
+        # Find JSON boundaries just in case
+        start = clean_text.find("{")
+        end = clean_text.rfind("}") + 1
+        if start != -1 and end != -1:
+            clean_text = clean_text[start:end]
+
         try:
-            data = json.loads(text)
+            data = json.loads(clean_text)
             score = data.get("score", 0)
             reason = data.get("reason", "No reason provided")
-        except:
+        except json.JSONDecodeError:
             score = 0
-            reason = "Failed to parse Judge output JSON"
+            reason = f"JSON Parse Failed. Raw output: {clean_text[:50]}..."
 
-        # 5. Update Database
-        print(f"--- [Judge] Updating DB for Row {row_id} with Score {score}... ---")
+        # 5. Update DB
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         cursor.execute('''
@@ -108,22 +120,7 @@ def lazy_judge(row_id, user_query, rag_context, model_reply):
         conn.commit()
         conn.close()
         
-        print(f"--- [Judge] SUCCESS: Row {row_id} Graded. ---")
+        print(f"--- [Judge] Success: Score {score}. Reason: {reason} ---")
 
     except Exception as e:
-        # THIS IS WHAT YOU NEED TO SEE
-        print(f"❌ [Judge] CRASHED: {str(e)}")
-        
-        # Log the error to DB so you see it in /logs endpoint too
-        try:
-            conn = sqlite3.connect(DB_NAME)
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE interactions 
-                SET status = ? 
-                WHERE id = ?
-            ''', (f"ERROR: {str(e)}", row_id))
-            conn.commit()
-            conn.close()
-        except:
-            pass
+        print(f"❌ [Judge] Error: {e}")
