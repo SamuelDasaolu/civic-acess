@@ -1,3 +1,5 @@
 .idx/dev.nix
 .env
 backend/__pycache__
+backend/preview.log
+.venv/

@@ -51,9 +51,10 @@ async def predict(request: Request):
     outputs = model.generate(
         **inputs,
         max_new_tokens=512,
-        temperature=0.3,
+        temperature=0.4,
         do_sample=True,
-        pad_token_id=tokenizer.eos_token_id
+        pad_token_id=tokenizer.eos_token_id,
+        repetition_penalty=1.2
     )
     
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
