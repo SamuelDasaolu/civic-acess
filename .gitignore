@@ -3,3 +3,4 @@
 backend/__pycache__
 backend/preview.log
 .venv/
+__pycache__/
