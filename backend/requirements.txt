@@ -7,3 +7,4 @@ requests
 pypdf
 python-dotenv
 google-generativeai
+google-cloud-aiplatform
