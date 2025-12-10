@@ -8,7 +8,7 @@ import google.generativeai as genai
 
 load_dotenv()
 
-DB_NAME = "chat_logs.db"
+DB_NAME = "db/chat_logs.db"
 
 # --- CONFIGURATION ---
 # We use the standard library but target the Flash model

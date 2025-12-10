@@ -5,7 +5,14 @@ import os
 from dotenv import load_dotenv
 from rag_engine import RAGEngine
 
-# --- VERTEX AI SDK ---
+# --- NEEDED FOR SLOW API ---
+from fastapi import Request # <--- NEW IMPORT
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+# --- GOOGLE SDKs for TRANSLATE and VERTEX AI ---
+from google.cloud import translate_v2 as translate
 from google.cloud import aiplatform
 
 # --- IMPORT EVALUATOR ---
@@ -14,7 +21,14 @@ from evaluator import init_db, log_request, lazy_judge
 
 load_dotenv()
 
+# Initialize Limiter (Tracks users by IP address)
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI()
+
+# Register the Limiter with FastAPI
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # --- CORS FIX ---
 app.add_middleware(
@@ -55,22 +69,58 @@ try:
 except Exception as e:
     print(f"--- FATAL VERTEX ERROR: {e} ---")
 
+# --- Initialize Translation Client ---
+try:
+    translate_client = translate.Client()
+    print("--- Translation Client Ready ---")
+except Exception as e:
+    print(f"--- WARNING: Translation Client Failed: {e} ---")
+    translate_client = None
+
 class UserQuery(BaseModel):
     message: str = "What is the most supreme law in Nigeria?"
     language: str = "english"
 
 @app.post("/chat")
-async def chat(query: UserQuery, background_tasks: BackgroundTasks):
+@limiter.limit("5/minute")
+async def chat(query: UserQuery, background_tasks: BackgroundTasks, request: Request):
     user_text = query.message
     target_lang = query.language.lower().strip()
 
     print(f"--- INCOMING: '{user_text}' -> '{target_lang}' ---")
 
+    # 0. TRANSLATION LAYER 
+    search_query = user_text
+    detected_lang = "en"
+
+    if translate_client and target_lang != "english":
+        try:
+            # Auto-detect and translate to English
+            # Result is a dict: {'input': '...', 'translatedText': '...', 'detectedSourceLanguage': 'fr'}
+            result = translate_client.translate(user_text, target_language="en")
+            # Check if we actually got a result
+            if isinstance(result, dict) and "translatedText" in result:
+                search_query = result["translatedText"]
+                detected_lang = result["detectedSourceLanguage"]
+                translation_status = "success"
+                print(f"--- Translated ({detected_lang}): '{user_text}' -> '{search_query}' ---")
+            
+            # Simple optimization: If user typed in English but selected 'Yoruba' in UI, 
+            # we don't need to change anything.
+            if detected_lang == "en":
+                search_query = user_text
+
+        except Exception as e:
+            print(f"--- ⚠️ TRANSLATION FAILED (Quota/Error): {e} ---")
+            print("--- Falling back to original user text ---")
+            search_query = user_text
+            translation_status = "failed_fallback"
+
     # 1. RAG Lookup
     rag_context = ""
     if rag_engine:
         try:
-            context_list = rag_engine.query_law(user_text)
+            context_list = rag_engine.query_law(search_query)
             if context_list:
                 rag_context = "\n".join(context_list) if isinstance(context_list, list) else str(context_list)
         except Exception as e:
@@ -127,18 +177,13 @@ Explain the [Legal Context] simply."""
     if vertex_endpoint:
         try:
             print("--- Sending request to Vertex AI SDK... ---")
-            
-            # The SDK handles auth automatically
-            # We pass the same payload structure your custom container expects
-            # Note: Custom containers receive 'instances'
+            # Vertex SDK Call
             response = vertex_endpoint.predict(
                 instances=[{"prompt": full_prompt}],
-                # Parameters are supported if your container reads them, 
-                # otherwise they are ignored but safe to send.
                 parameters={"maxOutputTokens": 256, "temperature": 0.5}
             )
             
-            # response.predictions is a list. Your container returns [text].
+            # response.predictions is a list. vertex container returns [text].
             if response.predictions:
                 raw_reply = response.predictions[0]
                 
@@ -161,7 +206,7 @@ Explain the [Legal Context] simply."""
 
     # 5. ASYNC EVALUATION (The 'Lazy Judge')
     try:
-        row_id = log_request(user_text, target_lang, rag_context, final_answer)
+        row_id = log_request(f"{user_text} [Translation in English: {search_query}]", target_lang, rag_context, final_answer)
         background_tasks.add_task(lazy_judge, row_id, user_text, rag_context, final_answer)
         print(f"--- Evaluator Triggered for Row {row_id} ---")
     except Exception as e:
@@ -173,14 +218,17 @@ Explain the [Legal Context] simply."""
         "debug_info": {
             "language": target_lang,
             "strategy": "Vertex AI SDK + Puppeteer + Lazy Judge",
+            "translation_status": translation_status,
+            "translated_query": search_query,
             "rag_context": rag_context
         }
     }
 
 @app.get("/logs")
-def view_logs():
+@limiter.limit("5/minute")
+def view_logs(request: Request):
     """See the graded answers with Error Handling"""
-    db_path = "chat_logs.db"
+    db_path = "db/chat_logs.db"
     
     if not os.path.exists(db_path):
         return {"error": f"Database file '{db_path}' not found."}
@@ -206,17 +254,51 @@ def view_logs():
         return {"error": f"Internal Error: {str(e)}"}
 
 @app.post("/test-rag")
-async def test_rag_retrieval(query: UserQuery):
+@limiter.limit("5/minute")
+async def test_rag_retrieval(query: UserQuery, request: Request):
     """Test endpoint to see exactly what the RAG engine retrieves."""
+    print('RAG TESTING ENDPOINT REACHED')
+    user_text = query.message
+    target_lang = query.language.lower().strip()
+
+    print(f"--- INCOMING: '{user_text}' -> '{target_lang}' ---")
+
+    # 0. TRANSLATION LAYER 
+    search_query = user_text
+    detected_lang = "en"
+
+    if translate_client and target_lang != "english":
+        try:
+            # Auto-detect and translate to English
+            # Result is a dict: {'input': '...', 'translatedText': '...', 'detectedSourceLanguage': 'fr'}
+            result = translate_client.translate(user_text, target_language="en")
+            
+            search_query = result["translatedText"]
+            detected_lang = result["detectedSourceLanguage"]
+            
+            print(f"--- Translated ({detected_lang}): '{user_text}' -> '{search_query}' ---")
+            
+            # Simple optimization: If user typed in English but selected 'Yoruba' in UI, 
+            # we don't need to change anything.
+            if detected_lang == "en":
+                search_query = user_text
+
+        except Exception as e:
+            print(f"Translation Error: {e}")
+
     if not rag_engine:
         raise HTTPException(status_code=500, detail="RAG Engine not initialized")
-    
+
     try:
-        results = rag_engine.query_law(query.message)
+        results = rag_engine.query_law(search_query)
         return {
-            "query": query.message,
+            "raw_query": query.message,
+            "translated_query": search_query,
+            "detected_lang": detected_lang,
             "retrieved_chunks": results,
             "chunk_count": len(results) if isinstance(results, list) else 1
         }
     except Exception as e:
         return {"error": str(e)}
+    
+   

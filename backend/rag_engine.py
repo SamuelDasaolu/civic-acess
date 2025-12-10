@@ -52,7 +52,7 @@ class RAGEngine:
             return
 
         # Load Constitution
-        const_path = "Constitution of the Federal Republic of Nigeria.txt"
+        const_path = "data/Constitution of the Federal Republic of Nigeria.txt"
         if os.path.exists(const_path):
             print(f"--- Processing {const_path}... ---")
             with open(const_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -66,7 +66,7 @@ class RAGEngine:
                     print(f"--> Indexed {len(const_chunks)} Constitution sections.")
 
         # Load Police Act
-        police_path = "P.19.txt"
+        police_path = "data/P.19.txt"
         if os.path.exists(police_path):
             print(f"--- Processing {police_path}... ---")
             with open(police_path, 'r', encoding='utf-8', errors='ignore') as f:
