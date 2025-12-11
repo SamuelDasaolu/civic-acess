@@ -1,43 +1,57 @@
 import os
 import re
-from chromadb import Client
-from sentence_transformers import SentenceTransformer, CrossEncoder # <--- NEW IMPORT
+from chromadb import Client, PersistentClient, EphemeralClient
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
 class RAGEngine:
     def __init__(self):
         print("--- RAG Engine: Initializing... ---")
-        self.client = Client()
-        # Fresh collection to ensure clean data
-        self.collection = self.client.get_or_create_collection("nigeria_legal_db_smart")
         
-        # 1. The Retriever (Fast, finds candidates)
+        # --- CLIENT SETUP ---
+        # We use PersistentClient to store data in /tmp (writable in Cloud Run)
+        # If that fails, we fall back to Ephemeral (RAM-only)
+        try:
+            self.client = PersistentClient(path="/tmp/chroma_db")
+            print("--- ChromaDB Client Created Successfully in /tmp ---")
+        except Exception as e:
+            print(f"--- ChromaDB Init Failed: {e} ---")
+            print("--- Switching to EphemeralClient (RAM only) ---")
+            self.client = EphemeralClient()
+
+        # Fresh collection
+        self.collection = self.client.get_or_create_collection("nigeria_legal_db_v6")
+        
+        # 1. Retriever (Fast)
         self.retriever = SentenceTransformer('all-MiniLM-L6-v2')
         
-        # 2. The Reranker (Smart, sorts candidates)
-        # This model is specifically trained to grade Q&A relevance
+        # 2. Reranker (Smart)
         self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
         
         self.is_loaded = False
         print("--- RAG Engine: Initialization Complete. ---")
 
     def clean_text(self, text):
+        """Cleans [source] tags and weird formatting."""
+        # Remove tags if they exist
         text = re.sub(r'\\', '', text)
         text = text.replace('&nbsp;', ' ')
+        # Fix multiple newlines
         text = re.sub(r'\n\s*\n', '\n\n', text)
         return text.strip()
 
     def chunk_constitution(self, text):
+        """Splits Constitution by 'Section X.'"""
         pattern = r'(Section\s+\d+\..*?)(?=\nSection\s+\d+\.|$)'
         raw_chunks = re.findall(pattern, text, re.DOTALL)
         formatted_chunks = []
         for chunk in raw_chunks:
             clean = chunk.strip()
             if len(clean) > 30: 
-                # Stronger Context Injection
                 formatted_chunks.append(f"Constitution of Nigeria 1999: {clean}")
         return formatted_chunks
 
     def chunk_police_act(self, text):
+        """Splits Police Act by numbered sections."""
         pattern = r'(\n\d+\.\s+.*?)(?=\n\d+\.\s+|$)'
         raw_chunks = re.findall(pattern, text, re.DOTALL)
         formatted_chunks = []
@@ -47,46 +61,73 @@ class RAGEngine:
                 formatted_chunks.append(f"Nigeria Police Act: Section {clean}")
         return formatted_chunks
 
+    def chunk_tenancy_law(self, text):
+        """
+        Splits Lagos Tenancy Law.
+        Handles formats like: '1.-(1) This Law...' or '3. A tenancy...'
+        """
+        # Pattern looks for: newline + digits + (dot OR dot-hyphen-paren)
+        pattern = r'(\n\d+(?:[\.-].*?)?.*?)(?=\n\d+(?:[\.-].*?)?|$)'
+        raw_chunks = re.findall(pattern, text, re.DOTALL)
+        
+        formatted_chunks = []
+        for chunk in raw_chunks:
+            clean = chunk.strip()
+            # Filter out Table of Contents or empty lines
+            if len(clean) > 50 and "Arrangement of Sections" not in clean:
+                formatted_chunks.append(f"Lagos Tenancy Law 2011: Section {clean}")
+        return formatted_chunks
+
     def load_constitution(self):
         if self.is_loaded:
             return
 
-        # Load Constitution
+        print("--- RAG Engine: Loading Documents... ---")
+
+        # 1. Load Constitution
         const_path = "data/Constitution of the Federal Republic of Nigeria.txt"
         if os.path.exists(const_path):
             print(f"--- Processing {const_path}... ---")
             with open(const_path, 'r', encoding='utf-8', errors='ignore') as f:
                 raw_text = self.clean_text(f.read())
-                const_chunks = self.chunk_constitution(raw_text)
-                if const_chunks:
-                    ids = [f"const_{i}" for i in range(len(const_chunks))]
-                    # Embed using the Retriever
-                    embeddings = self.retriever.encode(const_chunks)
-                    self.collection.add(embeddings=embeddings, documents=const_chunks, ids=ids)
-                    print(f"--> Indexed {len(const_chunks)} Constitution sections.")
+                chunks = self.chunk_constitution(raw_text)
+                if chunks:
+                    ids = [f"const_{i}" for i in range(len(chunks))]
+                    embeddings = self.retriever.encode(chunks)
+                    self.collection.add(embeddings=embeddings, documents=chunks, ids=ids)
+                    print(f"--> Indexed {len(chunks)} Constitution sections.")
 
-        # Load Police Act
+        # 2. Load Police Act
         police_path = "data/P.19.txt"
         if os.path.exists(police_path):
             print(f"--- Processing {police_path}... ---")
             with open(police_path, 'r', encoding='utf-8', errors='ignore') as f:
                 raw_text = self.clean_text(f.read())
-                police_chunks = self.chunk_police_act(raw_text)
-                if police_chunks:
-                    ids = [f"police_{i}" for i in range(len(police_chunks))]
-                    embeddings = self.retriever.encode(police_chunks)
-                    self.collection.add(embeddings=embeddings, documents=police_chunks, ids=ids)
-                    print(f"--> Indexed {len(police_chunks)} Police Act sections.")
+                chunks = self.chunk_police_act(raw_text)
+                if chunks:
+                    ids = [f"police_{i}" for i in range(len(chunks))]
+                    embeddings = self.retriever.encode(chunks)
+                    self.collection.add(embeddings=embeddings, documents=chunks, ids=ids)
+                    print(f"--> Indexed {len(chunks)} Police Act sections.")
+
+        # 3. Load Tenancy Law (NEW)
+        tenancy_path = "data/Lagos Tenancy Laws.txt"
+        if os.path.exists(tenancy_path):
+            print(f"--- Processing {tenancy_path}... ---")
+            with open(tenancy_path, 'r', encoding='utf-8', errors='ignore') as f:
+                raw_text = self.clean_text(f.read())
+                chunks = self.chunk_tenancy_law(raw_text)
+                if chunks:
+                    ids = [f"tenancy_{i}" for i in range(len(chunks))]
+                    embeddings = self.retriever.encode(chunks)
+                    self.collection.add(embeddings=embeddings, documents=chunks, ids=ids)
+                    print(f"--> Indexed {len(chunks)} Tenancy Law sections.")
+        else:
+            print(f"--- Warning: {tenancy_path} not found. Skipping. ---")
 
         self.is_loaded = True
 
     def query_law(self, question: str, initial_k=15, final_k=3):
-        """
-        Two-Step Search:
-        1. Retrieve top 15 candidates using Vectors (Fast)
-        2. Rerank them using Cross-Encoder (Smart)
-        3. Return top 3
-        """
         if not self.is_loaded:
             self.load_constitution()
         
@@ -104,16 +145,12 @@ class RAGEngine:
 
         candidates = results['documents'][0]
         
-        # 2. Reranking (The Logic Fix)
+        # 2. Reranking
         print(f"--- [Step 2] Reranking candidates... ---")
-        
-        # Prepare pairs for the Cross-Encoder: [[Question, Candidate1], [Question, Candidate2], ...]
         pairs = [[question, doc] for doc in candidates]
-        
-        # Get scores
         scores = self.reranker.predict(pairs)
         
-        # Zip texts with scores and sort by score descending
+        # Sort by score descending
         scored_candidates = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
         
         # 3. Select Top K
@@ -123,5 +160,3 @@ class RAGEngine:
             top_results.append(doc)
             
         return top_results
-
-

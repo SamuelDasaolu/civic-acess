@@ -111,6 +111,7 @@ def lazy_judge(row_id, user_query, rag_context, model_reply):
         2. Hallucination: Did the AI invent facts not in the Reference?
         3. Clarity: Is the answer simple?
         4. Language: Is the AI response in any of the target languages (English, Yoruba, Hausa or Wazobia Pidgin)?
+        5. It is however imperative that the model completes it's reply in a single language, the only acceptable code-switching is english/pidgin.
         
 
         Output Format:
