@@ -5,8 +5,8 @@ import os
 from dotenv import load_dotenv
 from rag_engine import RAGEngine
 
-# --- NEEDED FOR SLOW API ---
-from fastapi import Request # <--- NEW IMPORT
+# --- RATE LIMITING ---
+from fastapi import Request 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -15,9 +15,8 @@ from slowapi.errors import RateLimitExceeded
 from google.cloud import translate_v2 as translate
 from google.cloud import aiplatform
 
-# --- IMPORT EVALUATOR ---
-import sqlite3
-from evaluator import init_db, log_request, lazy_judge 
+# --- IMPORT EVALUATOR AND DB ---
+from evaluator import init_db, log_request, lazy_judge, get_db_connection
 
 load_dotenv()
 
@@ -92,6 +91,7 @@ async def chat(query: UserQuery, background_tasks: BackgroundTasks, request: Req
     # 0. TRANSLATION LAYER 
     search_query = user_text
     detected_lang = "en"
+    translation_status = "skipped_for_english"
 
     if translate_client and target_lang != "english":
         try:
@@ -224,34 +224,34 @@ Explain the [Legal Context] simply."""
         }
     }
 
+
 @app.get("/logs")
 @limiter.limit("5/minute")
 def view_logs(request: Request):
-    """See the graded answers with Error Handling"""
-    db_path = "db/chat_logs.db"
-    
-    if not os.path.exists(db_path):
-        return {"error": f"Database file '{db_path}' not found."}
-
+    """Fetches logs from Turso Remote DB"""
     try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        # Use the connection helper from evaluator.py
+        conn = get_db_connection()
+        if not conn:
+            return {"error": "Could not connect to Turso database."}
         
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='interactions'")
-        if not cursor.fetchone():
-            conn.close()
-            return {"error": "Database exists but table 'interactions' is missing."}
-
+        # Execute query
+        cursor = conn.cursor()
         cursor.execute("SELECT * FROM interactions ORDER BY id DESC LIMIT 10")
         rows = cursor.fetchall()
-        conn.close()
         
-        return {"logs": [dict(row) for row in rows]}
-
+        # Convert tuples to dictionary manually (Remote drivers vary on row_factory support)
+        # We get column names from description
+        columns = [description[0] for description in cursor.description]
+        results = []
+        for row in rows:
+            results.append(dict(zip(columns, row)))
+            
+        return {"logs": results}
     except Exception as e:
         print(f"LOGS ENDPOINT ERROR: {e}")
         return {"error": f"Internal Error: {str(e)}"}
+
 
 @app.post("/test-rag")
 @limiter.limit("5/minute")

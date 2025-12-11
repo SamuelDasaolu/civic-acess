@@ -10,3 +10,4 @@ python-dotenv
 google-generativeai
 google-cloud-aiplatform
 google-cloud-translate
+libsql
