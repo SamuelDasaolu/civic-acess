@@ -1,94 +1,209 @@
-# 🏛️ Civic-Access (Project by Team SABILAW)
 
-> **Status:** Hackathon Submission  
-> **Live API:** `https://civic-backend-528126792252.us-east4.run.app/docs`  
-> **Frontend:** `https://civic-access.web.app`
+-----
 
-## 📖 Overview
-**Civic Access** is a high-performance FastAPI backend designed to democratize legal access in Nigeria. It leverages **Retrieval-Augmented Generation (RAG)** to provide accurate legal citations from the **1999 Constitution**, **Police Act**, and **Lagos Tenancy Laws**.
+# 🏛️ Civic-Access: Democratizing Legal Knowledge with AI
 
-Crucially, it breaks the language barrier by supporting **Nigerian Pidgin, Yoruba, Hausa, and Igbo**, ensuring that the law is accessible to everyone, not just the elite.
+### *Project by Team SABILAW*
 
-## 🏗️ Architecture
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Status](https://img.shields.io/badge/Status-Hackathon_Submission-orange.svg)
+![Stack](https://img.shields.io/badge/Tech-FastAPI_|_React_|_RAG_|_Google_Cloud-green.svg)
+![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 
-The system follows a **Microservices** pattern hosted on **Google Cloud Platform**:
+> **🔴 Live Demo:** [https://n-atlas-hackathon.web.app](https://n-atlas-hackathon.web.app)  
+> **🧠 Legal Engine API:** `https://civic-backend-528126792252.us-east4.run.app/docs`
+> **📊 Live Evaluation Logs:** [https://civic-backend-528126792252.us-east4.run.app/logs](https://civic-backend-528126792252.us-east4.run.app/logs)   
+*(Check here to see the "Judge" grading answers in real-time)*
+> **🔐 Auth Engine API:** `https://partner-api-528126792252.us-east4.run.app/`
 
-1.  **Frontend (React/Firebase):** Captures user intent and preferred dialect.
-2.  **Translation Layer (Google Cloud Translate):** Auto-detects dialects (e.g., *"Wetin be the law?"*) and normalizes them to English for effective Vector Search.
-3.  **RAG Engine (ChromaDB + SentenceTransformers):**
-    * **Retrieval:** `all-MiniLM-L6-v2` fetches top 15 legal chunks.
-    * **Reranking:** `cross-encoder/ms-marco-MiniLM-L-6-v2` re-scores them for strict relevance.
-4.  **Inference (NCAIR1/N-ATLAS model):** An 8B-parameter model hosted on **NVIDIA L4 GPUs** generates the response in the user's requested persona.
-5.  **Persistence (Turso):** User interactions and logs are stored in a distributed SQLite database (**Turso**) to survive Cloud Run's ephemeral restarts.
-6.  **Evaluation (Gemini 2.0 Flash):** An asynchronous background task acts as a "Judge," grading every answer for accuracy and hallucination.
+-----
+
+## 📖 Executive Summary
+
+**Civic Access** is a multi-lingual, AI-powered legal assistant designed to bridge the gap between complex Nigerian laws and everyday citizens.
+
+The Nigerian legal system is written in complex English, effectively excluding millions of citizens who speak Pidgin, Yoruba, Hausa, or Igbo. **Civic Access** solves this by combining **Retrieval-Augmented Generation (RAG)** with a **Hybrid Translation Layer**, allowing users to ask questions like *"Wetin be the law for tiff?"* and receive accurate, legally cited answers in their local dialect.
+
+**Core Resources:**
+
+  * 📜 **1999 Constitution of the Federal Republic of Nigeria (as amended)**
+  * 👮 **The Nigeria Police Act 2020**
+  * 🏠 **2011 Lagos State Tenancy Laws**
+
+-----
+
+## 🏗️ Microservices Architecture
+
+Civic Access utilizes a decoupled **Microservices Architecture** hosted on **Google Cloud Platform (GCP)** to ensure scalability, fault tolerance, and separation of concerns.
+
+### The Ecosystem
+
+1.  **Frontend (The Face):** A React/Vite SPA hosted on **Firebase Hosting**. It manages the UI, language selection, and routes API calls to the appropriate backend.
+2.  **Service A: The Legal Brain (RAG Engine):** A high-performance FastAPI service on **Cloud Run**.
+      * **Translation:** Google Cloud Translate (v2) performs query-side translation to English.   *Disclaimer: This pre-processing is required solely to align user intent with our English-based Vector Store for accurate retrieval, distinct from the N-ATLAS model which performs the final generation.*
+      * **Retrieval:** ChromaDB + `all-MiniLM-L6-v2` fetches legal chunks.
+      * **Reranking:** `cross-encoder/ms-marco-MiniLM-L-6-v2` filters for strict relevance.
+      * **Inference:** Uses `NCAIR1/N-ATLaS `multilingual LLM to generate persona-based answers (Street Lawyer, Elder, etc.).
+      * **Judge:** `Gemini 2.0 Flash` evaluates answer quality in the background.  *Disclaimer: We only use `GEMINI` to serve the function of LLM as a judge. This is so users of our tool can see the performance of the `N-ATLaS model`.*
+3.  **Service B: The User Engine (Auth System):** A lightweight FastAPI service on **Cloud Run**.
+      * Handles User Registration, Login (JWT), and Profile Management.
+      * Uses **LibSQL/SQLAlchemy** for efficient user data persistence.
+
+-----
+
+## 🚀 Key Technical Features
+
+### 1\. The "Tower of Babel" Solution (Hybrid RAG)
+
+Traditional RAG fails when the query language (Pidgin) differs from the document language (English Law). We implemented a 3-step pipeline:
+
+  * **Ingest:** Detect dialect & translate to English (`Google Translate API`).
+  * **Retrieve:** Search Vector DB using the English query for semantic accuracy.
+  * **Generate:** Feed the *original* dialect query + *English* context to the LLM. This forces the model to "think" in Law but "speak" in the user's persona.
+
+### 2\. "Stateless" Persistence (Solved)
+
+Cloud Run is ephemeral (files get wiped on restart).
+
+  * **Vector DB:** We re-architected ChromaDB to run in `/tmp` (memory-mapped) for speed, with cross-session persistence handled by **Turso (LibSQL)**.
+  * **User Data:** All user logs and authentication data are stored in a distributed Turso database, ensuring no data loss during server cold starts.
+
+### 3\. Regex-Based Smart Chunking
+
+Standard "character count" chunking cuts laws in half. We built a custom parser using RegEx (e.g., `r'(Section\s+\d+\..*?)'`) to split text strictly by **Legal Sections**. We inject metadata (*"Constitution Section 33"*) into every embedding to guarantee citation accuracy.
+
+-----
 
 ## 🛠️ Tech Stack
 
-* **Framework:** FastAPI (Python 3.11)
-* **Compute:** Google Cloud Run (Serverless, Min Instances: 1, CPU Boost enabled)
-* **AI/LLM:** NCAIR1/N-ATLAS (Custom Container) + Gemini 1.5 Flash (Judge)
-* **Vector DB:** ChromaDB (Persistent Client in `/tmp`)
-* **Database:** Turso (LibSQL)
-* **Translation:** Google Cloud Translation API (v2)
-* **CI/CD:** GitHub Actions -> Google Artifact Registry -> Cloud Run
+| Component | Technology | Role |
+| :--- | :--- | :--- |
+| **Frontend** | React 18, Vite, Tailwind CSS | User Interface & State Management |
+| **Deployment** | Firebase Hosting | Global CDN for Static Assets |
+| **Backend 1** | FastAPI, PyTorch, ChromaDB | Legal RAG Engine & Inference |
+| **Backend 2** | FastAPI, SQLAlchemy, JWT | Authentication & User Management |
+| **Compute** | Google Cloud Run | Serverless Container Hosting |
+| **AI Models** | NCAIR1/N-ATLaS + Gemini 2.0 | Inference & Evaluation |
+| **Database** | Turso (LibSQL) | Distributed SQLite for Persistence |
+| **Translation** | Google Cloud Translation API | Real-time Dialect Normalization |
 
-## 🚀 Key Features & Architectural Challenges Solved
+-----
 
-Building **N-Atlas** wasn't just about connecting APIs. We faced significant hurdles in deploying a specialized Legal AI for a multi-lingual audience. Here is how we solved them:
+## 📂 Repository Structure
 
-### 1. The "Tower of Babel" Vector Mismatch
-* **The Problem:** Our vector database contains the Nigerian Constitution in **English**. When a user asked a question in **Pidgin** (*"Wetin be the law for tiff?"*) or **Yoruba**, the semantic distance between the query and the documents was too large. The RAG engine returned irrelevant chunks, causing the model to hallucinate.
-* **The Strategy:** We implemented a **"Hybrid Translation Pipeline."**
-    * **Step 1 (Ingest):** User query is auto-detected and translated to English using the **Google Cloud Translation API** (v2).
-    * **Step 2 (Retrieve):** The *translated* English query searches the vector database to find the accurate legal section.
-    * **Step 3 (Generate):** The *original* Pidgin/Yoruba query + the *English* legal context are fed to the LLM. This forces the model to "think" in Law but "speak" in Street Persona.
+```text
+CIVIC-ACCESS/
+├── backend/                   # 🧠 Service A: Legal RAG Engine
+│   ├── data/                  # Legal Texts (Constitution, Police Act and Lagos Tenancy Laws)
+│   ├── rag_engine.py          # Vector Search & Reranking Logic
+│   ├── evaluator.py           # Gemini Judge Logic
+│   ├── main.py                # API Entry Point
+│   └── Dockerfile             # Optimized for ML (PyTorch/GPU support)
+│
+├── partner_backend/           # 🔐 Service B: User Auth Engine
+│   ├── routes/                # Auth Endpoints (Login/Register)
+│   ├── models.py              # User Database Schema
+│   ├── app.py                 # API Entry Point
+│   └── Dockerfile             # Optimized for Speed (Lightweight)
+│
+├── frontend/                  # 💻 React Frontend
+│   ├── src/                   # Components, Pages, Context
+│   ├── vite.config.js         # Build Configuration
+│   └── firebase.json          # Hosting Configuration
+│
+└── README.md                  # This file
+```
 
-### 2. The "Stateless" Amnesia (Cloud Run Persistence)
-* **The Problem:** We chose **Google Cloud Run** for its serverless scalability, but its filesystem is ephemeral. Every time the server idled or redeployed, our local `users.db` and `chat_logs.db` were wiped instantly. This made maintaining user accounts impossible.
-* **The Strategy:** We moved to a **Distributed Database Architecture**.
-    * **Logs & Auth:** We migrated from local SQLite to **Turso (LibSQL)**, a remote edge database that persists data independently of our container's lifecycle.
-    * **Vector Index:** We re-architected the RAG engine to initialize the ChromaDB client in `/tmp` (the only writable directory in Cloud Run) and implemented a fallback to **Ephemeral (RAM) mode** to prevent crashes during cold boots.
-
-### 3. The "Needle in a Haystack" (Retrieval Precision)
-* **The Problem:** Standard "fixed-size chunking" (splitting text every 500 characters) failed miserably for legal texts. It would cut a law in half, separating the "Crime" from the "Penalty," confusing the AI.
-* **The Strategy:** We wrote **Regex-Based Smart Chunking**.
-    * Instead of character counts, our engine splits documents by **Legal Sections** (e.g., regex pattern `r'(Section\s+\d+\..*?)'`).
-    * **Metadata Injection:** We prepended the document source to every chunk (e.g., *"Constitution of Nigeria 1999: Section 33..."*) so the embeddings explicitly capture the source authority.
-    * **Reranking:** We added a **Cross-Encoder (`ms-marco-MiniLM-L-6-v2`)** step. After retrieving the top 15 broad results, the Reranker strictly grades them and discards the noise, keeping only the top 3 highly relevant laws.
-
-### 4. The "Cold Start" Latency
-* **The Problem:** Booting a container with **PyTorch, SentenceTransformers, and ChromaDB** took 20-30 seconds. This made the app feel "broken" to the first user.
-* **The Strategy:**
-    * We enabled **CPU Boost** on Cloud Run to overdrive the processor during startup.
-    * We configured **`min-instances: 1`** for demo periods, keeping the heavy RAG engine loaded in memory to ensure sub-second response times.
-
-### 5. Trust & Verification (The "Lazy Judge")
-* **The Problem:** How do we know if the 8B model is giving accurate legal advice or just making things up?
-* **The Strategy:** We built an **Asynchronous Evaluation Pipeline**.
-    * User requests are handled immediately.
-    * In the background (`BackgroundTasks`), a separate call is sent to **Gemini 1.5
+-----
 
 ## 🔧 Installation & Local Setup
 
-**Prerequisites:** Python 3.11+, Google Cloud SDK, Turso Account.
+### Prerequisites
+
+  * Node.js (v18+) & npm
+  * Python 3.11+
+  * Google Cloud SDK & Firebase CLI
+
+### 1\. Clone the Repository
 
 ```bash
-# 1. Clone the repo
-git clone [https://github.com/your-username/civic-backend.git](https://github.com/SamuelDasaolu/civic-acess.git)
-cd civic-backend/backend
+git clone https://github.com/SamuelDasaolu/civic-acess.git
+cd civic-access
+```
 
-# 2. Install Dependencies
+### 2\. Setup Auth Backend (Service B)
+
+```bash
+cd partner_backend
+# Create .env file with your credentials(TURSO_URL, TURSO_TOKEN, SECRET_KEY, ACCESS_TOKEN_EXPIRE_MINUTES)  
+python -m venv .venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements.txt
+uvicorn app:app --reload --port 8001
+```
 
-# 3. Environment Variables (.env)
-# To get VERTEX_RELATED tokens, first deploy the NCAIR1/N-ATLAS model found on HugginFace on Google's Vertex Servers
-# Create a .env file with:
-VERTEX_PROJECT_ID=your-project-id
-VERTEX_LOCATION=us-east4
-VERTEX_ENDPOINT_ID=your-endpoint-id
-GEMINI_API_KEY=your-gemini-key
-TURSO_URL=libsql://your-db.turso.io
-TURSO_TOKEN=your-turso-token
+### 3\. Setup Legal RAG Backend (Service A)
 
-# 4. Run Locally
-uvicorn main:app --reload
+```bash
+cd ../backend
+# Create .env file with your credentials(TURSO_URL, TURSO_TOKEN, SECRET_KEY, ACCESS_TOKEN_EXPIRE_MINUTES, GEMINI_API_KEY)  
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+### 4\. Setup Frontend
+
+```bash
+cd ../frontend
+npm install
+
+# Create .env file for Vite
+echo "VITE_BACKEND_URL=http://localhost:8000" > .env
+echo "VITE_AUTH_URL=http://localhost:8001" >> .env
+
+npm run dev
+```
+
+*Frontend will launch at `http://localhost:5173`*
+
+-----
+
+## 🔒 Security & Privacy
+
+  * **Authentication:** All user routes are protected via **JWT (JSON Web Tokens)** with strict expiration.
+  * **Data Privacy:** Chat logs are anonymized before evaluation.
+  * **CORS:** Strict origin policies are enforced in production to prevent unauthorized API access.
+
+## 🤝 Contributing
+
+1.  Fork the repository.
+2.  Create a feature branch (`git checkout -b feature/NewLaw`).
+3.  Commit your changes.
+4.  Push to the branch and open a Pull Request.
+
+## 👥 Team Sabilaw & Credits
+
+Built for the **Awarri Hackathon 2025**.
+
+  * **Team Lead, Backend & RAG Architecture:** [Dasaolu Samuel Oluwafeyigbemiga (SamuelDasaolu)](https://github.com/SamuelDasaolu)
+  * **Frontend & Auth System:** [Ogor Paul Olatunji (tunjipaul)](https://github.com/tunjipaul)
+  * **Data Engineering & Text Processing:** [Mulero Reuben Ayobami (Reubenay)](https://github.com/Reubenay)
+  * **Solution Overview & Submission Video:** [Akirinde Ademola Victor (Ademsbabyy)](https://github.com/Ademsbabyy)
+  * **Legal Adviser:** [Oluwapelumi Oluwafemi Awoyale (femilearnsai)](https://github.com/femilearnsai)
+
+## 📄 License
+
+This project is licensed under the **MIT License**.
+
+## 📸 Screenshots
+
+### User Dashboard
+![Dashboard](./screenshots/dashboard.png)
+
+### Chat Interface
+![Chatbot](./screenshots/chatbot.png)
+
+### Evaluation Interface
+![Judge](./screenshots/evaluation.png)
+
+> *Legal Disclaimer: Civic Access provides legal information for educational purposes only. It does not constitute professional legal advice.*
