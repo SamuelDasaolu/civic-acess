@@ -11,7 +11,7 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 
 > **🔴 Live Demo:** [https://n-atlas-hackathon.web.app](https://n-atlas-hackathon.web.app)  
-> **🧠 Legal Engine API:** `https://civic-backend-528126792252.us-east4.run.app/docs`
+> **🧠 Legal Engine API:** `https://civic-backend-528126792252.us-east4.run.app/docs`  
 > **📊 Live Evaluation Logs:** [https://civic-backend-528126792252.us-east4.run.app/logs](https://civic-backend-528126792252.us-east4.run.app/logs)   
 *(Check here to see the "Judge" grading answers in real-time)*
 > **🔐 Auth Engine API:** `https://partner-api-528126792252.us-east4.run.app/`
