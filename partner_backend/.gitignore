@@ -1,0 +1,7 @@
+.env
+civic_access.db
+local.db
+__pycache__/
+local.db-shm
+local.db-wal
+local.db-info
